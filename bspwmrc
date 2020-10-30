@@ -1,0 +1,176 @@
+#!/usr/bin/bash
+readonly config_dir=~/.config/bspwm
+readonly script_name=$(basename $0)
+
+declare -A icons
+icons["home"]= 
+
+declare -A colors
+# Normal Colors
+colors["black"]="282828" 
+colors["red"]="f43753" 
+colors["green"]="c9d05c" 
+colors["yellow"]="ffc24b" 
+colors["blue"]="b3deef" 
+colors["magenta"]="d3b987" 
+colors["cyan"]="73cef4" 
+colors["white"]="eeeeee" 
+# Bright colors
+colors["black_bright"]="4c4c4c" 
+colors["red_bright"]="f43753" 
+colors["green_bright"]="c9d05c" 
+colors["yellow_bright"]="ffc24b" 
+colors["blue_bright"]="b3deef" 
+colors["magenta_bright"]="d3b987" 
+colors["cyan_bright"]="73cef4" 
+colors["white_bright"]="feffff" 
+
+declare -A bspwm_opts
+bspwm_opts["border_width"]="8"
+bspwm_opts["borderless_monocle"]="true"
+bspwm_opts["click_to_focus"]="any"
+bspwm_opts["focus_follows_pointer"]="false"
+bspwm_opts["gapless_monocle"]="true"
+bspwm_opts["pointer_action2"]="resize_side"
+bspwm_opts["pointer_modifier"]="mod4" # super
+bspwm_opts["split_ratio"]="0.52"
+bspwm_opts["window_gap"]="8"
+# Window Manager Colors
+bspwm_opts["normal_border_color"]="#${colors["black"]}"
+bspwm_opts["active_border_color"]="#${colors["black_bright"]}"
+bspwm_opts["focused_border_color"]="#${colors["cyan"]}"
+
+declare -a desktops=(I II III IV V VI VII VIII IX X)
+
+# helper function that returns true (1) if the given value is defined and is
+# defined as a function, otherwise returns false (0).
+function_exists(){ set +e; declare -f "$1" > /dev/null; echo $?; set -e; }
+
+configure_wm(){
+  bspc monitor -d ${!desktops[@]}
+
+  set +e; for key in "${!bspwm_opts[@]}"; do 
+    bspc config $key ${bspwm_opts[$key]}
+  done; set -e;
+
+  # This must go after the rest of the config!
+  if [ -e "${BSPWM_TREE:- }" ] ; then
+    bspc restore -T "$BSPWM_TREE" -H "$BSPWM_HISTORY" -S "$BSPWM_STACK"
+    rm "$BSPWM_TREE" "$BSPWM_HISTORY" "$BSPWM_STACK"
+  fi
+
+  run_window_rules
+}
+
+run_window_rules(){
+  bspc rule -a Gimp desktop='^8' state=floating follow=on
+  bspc rule -a Chromium desktop='^2'
+  bspc rule -a mplayer2 state=floating
+  bspc rule -a Kupfer.py focus=on
+  bspc rule -a Screenkey manage=off
+}
+
+run_compositor(){
+  local log_file="$config_dir/compositor.log"
+  local config_file="$config_dir/compositorrc"
+  if pgrep -x picom >/dev/null; then killall picom; fi
+  truncate --size=0 "$log_file"
+  picom --config $config_file >>"$log_file" 2>&1 & disown
+}
+
+run_notifier(){
+  local log_file="$config_dir/dunst.log"
+  local config_file="$config_dir/dunstrc"
+  if pgrep -x dunst >/dev/null; then killall dunst; fi
+  truncate --size=0 "$log_file"
+  dunst -conf $config_file \
+    >>$log_file 2>&1 & disown
+}
+
+run_bar(){
+  local config_file="$config_dir/polybarrc"
+  local log_file="$config_dir/polybar.log"
+  if pgrep -x polybar >/dev/null; then killall polybar; fi
+  truncate --size=0 "$log_file"
+  polybar -q -r -c $config_file top \
+    >>$log_file 2>&1 & disown
+}
+
+run_reload(){
+  xrandr --output eDP1 --mode 1920x1080 --dpi 192 --primary || true
+  setxkbmap -option ctrl:nocaps -option altwin:swap_lalt_lwin || true
+
+  configure_wm
+  $0 keybinder
+  $0 notifier
+  $0 compositor
+  $0 bar
+}
+
+run_keybinder(){
+  local config_file="$config_dir/sxhkdrc"
+  local log_file="$config_dir/sxhkd.log"
+  if pgrep -x sxhkd >/dev/null; then killall sxhkd; fi
+  truncate --size=0 "$log_file"
+  sxhkd -c $config_file -r "$log_file" >>"$log_file" 2>&1 & 
+  disown
+}
+
+run_startup(){ 
+  local log_file="$config_dir/$(basename $0).log"
+  truncate --size=0 "$log_file"
+  run_reload
+}
+
+run_edit(){ 
+  if command -v nvim >/dev/null; then local cmd="nvim -np"
+  elif command -v vim >/dev/null; then local cmd="vim -np"
+  elif command -v vi >/dev/null; then local cmd="vi"
+  else local cmd="${EDITOR:-nano}"
+  fi; ${cmd} $config_dir/*rc ~/.config/alacritty/alacritty.yml
+}
+
+run_help(){ cat <<-HELP
+
+$script_name manages BSPWM and related services.
+
+COMMANDS ::
+
+  startup         (default) run initially by bspwm.
+  bar             (re)start the status bar.
+  keybinder       (re)start the keyinds listener.
+  notifier        (re)start the notification daemon.
+  edit            edit $script_name (this script).
+  reload          reload the wm and related services.
+  window_rules    reconfigure window-specific rules.
+  help            run it to get (this) help.
+
+HELP
+}
+
+main(){
+  export DISPLAY="${DISPLAY:-:0}"
+  local cmd="${1:-startup}"
+
+  # allow common aliases for help.
+  if [[ $cmd == "-h" || "$cmd" == "--help" ]]; then local cmd= "help"; fi
+
+  # if there was a legitimate argument, pop it off the list of cli args.
+  if [[ $# -ge 1 ]]; then shift; fi
+
+  if [[ "$cmd" == "0" ]]; then local cmd="startup"; fi
+
+  if [[ $(function_exists "run_$cmd") ]]; then 
+    eval "run_$cmd $*" && exit 0
+  else 
+    run_help && exit -1
+  fi
+}
+
+set -euo pipefail -o posix
+
+# Finally call the main function with the supplied args (note: @ instead of *
+# handles quotes better)
+main $@
+
+# vim: ft=sh:fdm=indent:fdl=0:ft=sh:ts=2:sw=2:sts=2:et:noai:noci
